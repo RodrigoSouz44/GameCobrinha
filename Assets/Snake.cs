@@ -8,7 +8,7 @@ public class Snake : MonoBehaviour
     [Header("Prefabs")]
     public Transform bodyPrefab;
     public Transform foodPrefab;
-    public Transform wallPrefab;
+    public Transform wallPrefab; // deve ser Transform (igual ao seu código original)
 
     [Header("UI")]
     public TextMeshProUGUI scoreText;
@@ -16,7 +16,7 @@ public class Snake : MonoBehaviour
     public TextMeshProUGUI gameOverText;
 
     [Header("Configurações do Jogo")]
-    public float speed = 8.0f;
+    public float speed = 16.0f; // velocidade inicial (ajustado)
     public float cellSize = 0.3f;
 
     private List<Transform> body = new List<Transform>();
@@ -26,32 +26,80 @@ public class Snake : MonoBehaviour
     private Vector2 direction;
     private Vector2 cellIndex = Vector2.zero;
 
-    private float changeCellTime = 0;
+    private float changeCellTime = 0f;
     private int score = 0;
     private int highScore = 0;
     private bool gameOver = false;
+    private bool gameWon = false;
 
-    // NOVO: guarda a posição da cabeça antes do movimento (usado para spawn da nova parte)
     private Vector3 previousHeadPosition;
+
+    // velocidade automática
+    private float timeSinceStart = 0f;
+    private float speedIncreaseInterval = 2f;
+    private float speedIncreaseAmount = 0.8f;
+    private float maxSpeed = 60f;
+
+    // vitória
+    private float timeElapsed = 0f;
+    private float winTimeSeconds = 60f;
+    private int winScore = 30;
+
+    // geração de obstáculos internos
+    [Header("Obstáculos internos (aleatórios)")]
+    [Tooltip("Quantidade de blocos internos gerados a cada partida")]
+    public int obstacleCount = 8;
+    [Tooltip("Distância mínima (em células) dos obstáculos para a cabeça/corpo")]
+    public int obstacleMinDistanceCells = 2;
 
     void Start()
     {
-        gameOverText.gameObject.SetActive(false);
-        direction = Vector2.up;
+        if (gameOverText != null) gameOverText.gameObject.SetActive(false);
 
+        direction = Vector2.up;
+        previousHeadPosition = transform.position;
+
+        highScore = PlayerPrefs.GetInt("HighScore", 0);
+
+        // cria paredes, gera obstáculos e comida
+        ClearWalls();
         CreateWalls();
+        GenerateObstacles(); // gera obstáculos dentro da área criada
         SpawnFood();
 
         scoreText.text = "SCORE: 0";
-        highScoreText.text = "HIGH SCORE: 0";
+        highScoreText.text = "HIGH SCORE: " + highScore;
+
+        timeSinceStart = 0f;
+        timeElapsed = 0f;
     }
 
     void Update()
     {
-        if (gameOver)
+        if (gameOver || gameWon)
         {
-            if (Input.GetKeyDown(KeyCode.R))
-                Restart();
+            if (Input.GetKeyDown(KeyCode.R)) Restart();
+            return;
+        }
+
+        timeElapsed += Time.deltaTime;
+
+        // aumento de velocidade automático a cada interval
+        timeSinceStart += Time.deltaTime;
+        if (timeSinceStart >= speedIncreaseInterval)
+        {
+            timeSinceStart = 0f;
+            if (speed < maxSpeed)
+            {
+                speed += speedIncreaseAmount;
+                if (speed > maxSpeed) speed = maxSpeed;
+            }
+        }
+
+        // condição de vitória
+        if (timeElapsed >= winTimeSeconds || score >= winScore)
+        {
+            OnWin();
             return;
         }
 
@@ -77,21 +125,16 @@ public class Snake : MonoBehaviour
     {
         if (Time.time > changeCellTime)
         {
-            // Salva a posição atual da cabeça ANTES de mover — usada para GrowBody quando não há corpo
             previousHeadPosition = transform.position;
 
-            // Move o corpo para seguir
             for (int i = body.Count - 1; i > 0; i--)
-            {
                 body[i].position = body[i - 1].position;
-            }
 
             if (body.Count > 0)
                 body[0].position = transform.position;
 
-            // Move a cabeça
             transform.position += (Vector3)direction * cellSize;
-            changeCellTime = Time.time + 1 / speed;
+            changeCellTime = Time.time + 1f / speed;
 
             cellIndex = transform.position / cellSize;
         }
@@ -99,28 +142,14 @@ public class Snake : MonoBehaviour
 
     void GrowBody()
     {
-        Vector2 position;
-
-        if (body.Count > 0)
-        {
-            // Se já tem corpo, posiciona a nova peça no fim (comportamento normal)
-            position = body[body.Count - 1].position;
-        }
-        else
-        {
-            // Se NÃO tem corpo, instancia a nova peça na posição QUE A CABEÇA ESTAVA antes de se mover
-            // (evita instanciar sobre a cabeça e causar colisão imediata)
-            position = previousHeadPosition;
-        }
-
-        body.Add(Instantiate(bodyPrefab, position, Quaternion.identity).transform);
+        Vector3 pos = (body.Count > 0) ? body[body.Count - 1].position : previousHeadPosition;
+        body.Add(Instantiate(bodyPrefab, pos, Quaternion.identity).transform);
     }
 
     void CheckEatFood()
     {
         if (currentFood == null) return;
 
-        // Detecção suave (com base na distância) — suficiente para grade baseada em cellSize
         float distance = Vector2.Distance(transform.position, currentFood.position);
         if (distance < cellSize / 2f)
         {
@@ -128,56 +157,54 @@ public class Snake : MonoBehaviour
             currentFood = null;
             GrowBody();
             UpdateScore();
-            SpawnFood(); // gera outro sem pausar o jogo
+            SpawnFood();
         }
     }
 
     void UpdateScore()
     {
         score++;
-        scoreText.text = "SCORE: " + score;
+        if (scoreText != null) scoreText.text = "SCORE: " + score;
+        if (score > highScore) highScore = score;
+        if (highScoreText != null) highScoreText.text = "HIGH SCORE: " + highScore;
     }
 
     void SpawnFood()
     {
-        // Garante apenas 1 comida ativa
         if (currentFood != null) return;
 
-        // Tenta posições válidas (evita parede e corpo)
-        for (int tries = 0; tries < 100; tries++)
+        for (int tries = 0; tries < 200; tries++)
         {
-            float x = Random.Range(-23, 23) * cellSize;
-            float y = Random.Range(-13, 11) * cellSize;
-            Vector2 pos = new Vector2(x, y);
+            int gx = Random.Range(-22, 23); // grade X (células)
+            int gy = Random.Range(-12, 11); // grade Y
+
+            // evita bordas: se quiser permitir mais perto da borda ajuste os limites
+            if (gx <= -23 || gx >= 23 || gy <= -13 || gy >= 11) continue;
+
+            Vector2 pos = new Vector2(gx * cellSize, gy * cellSize);
 
             bool invalid = false;
             foreach (var w in wall)
                 if (Vector2.Distance(pos, w.position) < cellSize * 0.9f) { invalid = true; break; }
-
             if (invalid) continue;
 
             foreach (var b in body)
-            {
                 if (Vector2.Distance(pos, b.position) < cellSize * 0.9f) { invalid = true; break; }
-            }
-
             if (invalid) continue;
 
-            // evita spawn exatamente na cabeça
             if (Vector2.Distance(pos, transform.position) < cellSize * 0.9f) continue;
 
             currentFood = Instantiate(foodPrefab, pos, Quaternion.identity);
             return;
         }
 
-        // Se não achou posição após várias tentativas, tenta spawn próximo (menos ideal, mas evita loop infinito)
-        Vector3 fallback = transform.position + new Vector3(direction.x * cellSize * 3f, direction.y * cellSize * 3f, 0);
+        // fallback
+        Vector3 fallback = transform.position + new Vector3(direction.x * cellSize * 3f, direction.y * cellSize * 3f, 0f);
         currentFood = Instantiate(foodPrefab, fallback, Quaternion.identity);
     }
 
     void CheckCollisions()
     {
-        // Checa colisão com parede
         foreach (var w in wall)
         {
             if (Vector2.Distance(transform.position, w.position) < cellSize / 2f)
@@ -187,8 +214,6 @@ public class Snake : MonoBehaviour
             }
         }
 
-        // Checa colisão com corpo (pula checagem com o segmento que eventualmente esteja imediatamente atrás da cabeça)
-        // Para evitar detecção falsa imediata no momento do crescimento, conferimos com precisão por distância.
         for (int i = 0; i < body.Count; i++)
         {
             if (Vector2.Distance(transform.position, body[i].position) < cellSize / 2f)
@@ -199,54 +224,140 @@ public class Snake : MonoBehaviour
         }
     }
 
+    // --- paredes externas (borda) ---
     void CreateWalls()
     {
-        int cellX = -24;
-        int cellY = 11;
+        // limpa antes
+        ClearWalls();
+
+        int left = -24;
+        int top = 11;
         int height = 25;
 
-        float horizontal = cellX * cellSize;
-        float vertical = cellY * cellSize;
+        float horizontal = left * cellSize;
+        float vertical = top * cellSize;
 
-        for (int i = 0; i < (int)Mathf.Abs((horizontal * 2) / cellSize) + 1; ++i)
+        // horizontais (top e bottom)
+        for (int i = 0; i < Mathf.Abs(left * 2) + 1; i++)
         {
-            Vector2 top = new Vector3(horizontal + cellSize * i, vertical);
-            Vector2 bottom = new Vector3(horizontal + cellSize * i, vertical - height * cellSize);
-            wall.Add(Instantiate(wallPrefab, top, Quaternion.identity).transform);
-            wall.Add(Instantiate(wallPrefab, bottom, Quaternion.identity).transform);
+            Vector2 topPos = new Vector2(horizontal + i * cellSize, vertical);
+            Vector2 bottomPos = new Vector2(horizontal + i * cellSize, vertical - height * cellSize);
+            wall.Add(Instantiate(wallPrefab, topPos, Quaternion.identity).transform);
+            wall.Add(Instantiate(wallPrefab, bottomPos, Quaternion.identity).transform);
         }
 
-        for (int i = 0; i < height; ++i)
+        // verticais (left e right)
+        for (int i = 0; i < height + 1; i++)
         {
-            Vector2 right = new Vector3(horizontal, vertical - cellSize * i);
-            Vector2 left = new Vector3(-horizontal, vertical - cellSize * i);
-            wall.Add(Instantiate(wallPrefab, right, Quaternion.identity).transform);
-            wall.Add(Instantiate(wallPrefab, left, Quaternion.identity).transform);
+            Vector2 leftPos = new Vector2(left * cellSize, vertical - i * cellSize);
+            Vector2 rightPos = new Vector2(-left * cellSize, vertical - i * cellSize);
+            wall.Add(Instantiate(wallPrefab, leftPos, Quaternion.identity).transform);
+            wall.Add(Instantiate(wallPrefab, rightPos, Quaternion.identity).transform);
         }
+    }
+
+    // limpa todas as paredes (borda + internas)
+    void ClearWalls()
+    {
+        for (int i = wall.Count - 1; i >= 0; i--)
+        {
+            if (wall[i] != null) Destroy(wall[i].gameObject);
+        }
+        wall.Clear();
+    }
+
+    // gera obstáculos internos em posições da grade (multiplicadas por cellSize)
+    void GenerateObstacles()
+    {
+        if (wallPrefab == null)
+        {
+            Debug.LogWarning("GenerateObstacles: wallPrefab não está definido no Inspector.");
+            return;
+        }
+
+        int tries = 0;
+        int created = 0;
+
+        // limites em células (ajuste conforme seu CreateWalls)
+        int minX = -22;
+        int maxX = 22;
+        int minY = -12;
+        int maxY = 10;
+
+        while (created < obstacleCount && tries < obstacleCount * 20)
+        {
+            tries++;
+            int gx = Random.Range(minX, maxX + 1);
+            int gy = Random.Range(minY, maxY + 1);
+
+            // evita borda imediata (não criar em x == minX/maxX ou y == minY/maxY)
+            if (gx <= minX + 0 || gx >= maxX - 0 || gy <= minY + 0 || gy >= maxY - 0) continue;
+
+            Vector2 pos = new Vector2(gx * cellSize, gy * cellSize);
+
+            // evita gerar em cima da cabeça (distância em células)
+            if (Vector2.Distance(pos, transform.position) < obstacleMinDistanceCells * cellSize) continue;
+
+            // evita colidir com corpo existente ou parede existente
+            bool invalid = false;
+            foreach (var b in body) if (Vector2.Distance(pos, b.position) < cellSize * 0.9f) { invalid = true; break; }
+            if (invalid) continue;
+
+            foreach (var w in wall) if (Vector2.Distance(pos, w.position) < cellSize * 0.9f) { invalid = true; break; }
+            if (invalid) continue;
+
+            // evita próximo à comida atual
+            if (currentFood != null && Vector2.Distance(pos, currentFood.position) < cellSize * 1.2f) continue;
+
+            Transform t = Instantiate(wallPrefab, (Vector3)pos, Quaternion.identity).transform;
+            wall.Add(t);
+            created++;
+        }
+
+        Debug.Log($"GenerateObstacles: tentou {tries} vezes e criou {created} obstáculos.");
     }
 
     void GameOver()
     {
         gameOver = true;
-        gameOverText.gameObject.SetActive(true);
-        gameOverText.text = "GAME OVER\nPressione R para reiniciar";
+        if (gameOverText != null)
+        {
+            gameOverText.gameObject.SetActive(true);
+            gameOverText.text = "GAME OVER\nPressione R para reiniciar";
+        }
+    }
+
+    void OnWin()
+    {
+        gameWon = true;
+        if (gameOverText != null)
+        {
+            gameOverText.gameObject.SetActive(true);
+            gameOverText.text = "VOCÊ VENCEU!\nPressione R para reiniciar";
+        }
     }
 
     void Restart()
     {
         gameOver = false;
-        gameOverText.gameObject.SetActive(false);
+        gameWon = false;
+        if (gameOverText != null) gameOverText.gameObject.SetActive(false);
 
-        if (score > highScore)
-            highScore = score;
+        if (score > highScore) highScore = score;
+        PlayerPrefs.SetInt("HighScore", highScore);
+        if (highScoreText != null) highScoreText.text = "HIGH SCORE: " + highScore;
 
-        highScoreText.text = "HIGH SCORE: " + highScore;
         score = 0;
-        scoreText.text = "SCORE: 0";
+        if (scoreText != null) scoreText.text = "SCORE: 0";
 
-        // limpa o corpo e comida
-        foreach (var b in body) Destroy(b.gameObject);
+        // limpa corpo
+        foreach (var b in body) if (b != null) Destroy(b.gameObject);
         body.Clear();
+
+        // limpa paredes e recria
+        ClearWalls();
+        CreateWalls();
+        GenerateObstacles();
 
         if (currentFood != null) Destroy(currentFood.gameObject);
         currentFood = null;
@@ -254,9 +365,13 @@ public class Snake : MonoBehaviour
         transform.position = Vector3.zero;
         direction = Vector2.up;
 
-        // reseta temporizadores/posição anterior
-        changeCellTime = 0;
+        changeCellTime = 0f;
         previousHeadPosition = transform.position;
+
+        // reset velocidade e timers
+        speed = 16f;
+        timeSinceStart = 0f;
+        timeElapsed = 0f;
 
         SpawnFood();
     }
